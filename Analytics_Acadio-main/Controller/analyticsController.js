@@ -197,3 +197,85 @@ exports.storeView = async (req, res) => {
     });
   }
 };
+
+exports.dataByUid = async (req, res) => {
+  try {
+    const uid = req.body.uid * 1;
+    // const month = req.body.month + "/2022";
+    const screen = "$" + req.body.screenName;
+
+    const screenName = req.body.screenName;
+
+    const matchScreen = req.body.screenName + ".month";
+
+    const month = req.body.month;
+
+    let data;
+
+    if (screenName.toUpperCase() !== "ALL") {
+      data = await Analytics.aggregate([
+        {
+          $match: { uid: uid },
+        },
+
+        {
+          $unwind: screen,
+        },
+        {
+          $match: {
+            [matchScreen]: month,
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            [screenName]: { month: 1, monthViews: 1, week: 1, day: 1 },
+          },
+        },
+      ]);
+    } else {
+      data = await Analytics.aggregate([
+        {
+          $match: { uid: uid },
+        },
+
+        {
+          $unwind: "$poolsMain",
+        },
+
+        {
+          $unwind: "$challegeMain",
+        },
+        {
+          $unwind: "$levels",
+        },
+        {
+          $unwind: "$profile",
+        },
+        {
+          $match: {
+            "poolsMain.month": month,
+            "challegeMain.month": month,
+            "levels.month": month,
+            "profile.month": month,
+          },
+        },
+
+        // {
+        //   $project: {
+        //     _id: 0,
+        //     [screenName]: { month: 1, monthViews: 1, week: 1, day: 1 },
+        //   },
+        // },
+      ]);
+    }
+
+    res.send(data);
+  } catch (err) {
+    console.log(err);
+    res.status(401).json({
+      status: "Failed",
+      data: err,
+    });
+  }
+};
