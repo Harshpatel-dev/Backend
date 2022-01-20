@@ -217,7 +217,6 @@ exports.dataByUid = async (req, res) => {
         {
           $match: { uid: uid },
         },
-
         {
           $unwind: screen,
         },
@@ -238,35 +237,39 @@ exports.dataByUid = async (req, res) => {
         {
           $match: { uid: uid },
         },
-
         {
-          $unwind: "$poolsMain",
-        },
-
-        {
-          $unwind: "$challegeMain",
-        },
-        {
-          $unwind: "$levels",
-        },
-        {
-          $unwind: "$profile",
-        },
-        {
-          $match: {
-            "poolsMain.month": month,
-            "challegeMain.month": month,
-            "levels.month": month,
-            "profile.month": month,
+          $project: {
+            _id: 0,
+            pools: {
+              $filter: {
+                input: "$poolsMain",
+                as: "item",
+                cond: { $eq: ["$$item.month", month] },
+              },
+            },
+            challenge: {
+              $filter: {
+                input: "$challegeMain",
+                as: "item",
+                cond: { $eq: ["$$item.month", month] },
+              },
+            },
+            levels: {
+              $filter: {
+                input: "$levels",
+                as: "item",
+                cond: { $eq: ["$$item.month", month] },
+              },
+            },
+            profile: {
+              $filter: {
+                input: "$profile",
+                as: "item",
+                cond: { $eq: ["$$item.month", month] },
+              },
+            },
           },
         },
-
-        // {
-        //   $project: {
-        //     _id: 0,
-        //     [screenName]: { month: 1, monthViews: 1, week: 1, day: 1 },
-        //   },
-        // },
       ]);
     }
 
@@ -278,4 +281,625 @@ exports.dataByUid = async (req, res) => {
       data: err,
     });
   }
+};
+
+exports.getByField = async (req, res) => {
+  try {
+    const month = req.body.month;
+    const week = req.body?.week;
+    const day = req.body?.day;
+    const SLICE_NUMBER = 20;
+
+    let result;
+    if (week === undefined && day === undefined) {
+      result = await getByMonth(month);
+    } else if (day === undefined) {
+      console.log("week");
+      result = await getByWeek(month, week);
+    } else if (week === undefined) {
+      console.log("day");
+      result = await getByDay(month, day);
+    }
+
+    res.status(200).json({
+      status: "Success",
+      data: result,
+    });
+  } catch (err) {
+    console.log(err);
+    res.status(401).json({
+      status: "Failed",
+      data: err,
+    });
+  }
+};
+
+const getByMonth = async (month) => {
+  const result = await Analytics.aggregate([
+    {
+      $project: {
+        _id: 0,
+        uid: 1,
+        pools: {
+          $filter: {
+            input: "$poolsMain",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+        challenge: {
+          $filter: {
+            input: "$challegeMain",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+        levels: {
+          $filter: {
+            input: "$levels",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+        profile: {
+          $filter: {
+            input: "$profile",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        profile: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: ["$profile.monthViews", 0] }, 0] },
+              {
+                uid: "$uid",
+                monthViews: { $arrayElemAt: ["$profile.monthViews", 0] },
+              },
+              null,
+            ],
+          },
+        },
+        pools: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: ["$pools.monthViews", 0] }, 0] },
+              {
+                uid: "$uid",
+                monthViews: { $arrayElemAt: ["$pools.monthViews", 0] },
+              },
+              null,
+            ],
+          },
+        },
+        challenge: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: ["$challenge.monthViews", 0] }, 0] },
+              {
+                uid: "$uid",
+                monthViews: { $arrayElemAt: ["$challenge.monthViews", 0] },
+              },
+              null,
+            ],
+          },
+        },
+        levels: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: ["$levels.monthViews", 0] }, 0] },
+              {
+                uid: "$uid",
+                monthViews: { $arrayElemAt: ["$levels.monthViews", 0] },
+              },
+              null,
+            ],
+          },
+        },
+      },
+    },
+    {
+      $addFields: {
+        month: month,
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        month: 1,
+        profile: { $setDifference: ["$profile", [null]] },
+        challenge: { $setDifference: ["$challenge", [null]] },
+        levels: { $setDifference: ["$levels", [null]] },
+        pools: { $setDifference: ["$pools", [null]] },
+      },
+    },
+    {
+      $unwind: {
+        path: "$profile",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "profile.monthViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$month",
+        profile: { $push: "$profile" },
+        challenge: { $first: "$challenge" },
+        levels: { $first: "$levels" },
+        pools: { $first: "$pools" },
+      },
+    },
+    {
+      $unwind: {
+        path: "$pools",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "pools.monthViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$_id",
+        pools: { $push: "$pools" },
+        challenge: { $first: "$challenge" },
+        levels: { $first: "$levels" },
+        profile: { $first: "$profile" },
+      },
+    },
+    {
+      $unwind: {
+        path: "$challenge",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "challenge.monthViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$_id",
+        challenge: { $push: "$challenge" },
+        pools: { $first: "$pools" },
+        levels: { $first: "$levels" },
+        profile: { $first: "$profile" },
+      },
+    },
+    {
+      $unwind: {
+        path: "$levels",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "levels.monthViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$_id",
+        levels: { $push: "$levels" },
+        pools: { $first: "$pools" },
+        challenge: { $first: "$challenge" },
+        profile: { $first: "$profile" },
+      },
+    },
+    {
+      $project: {
+        pools: { $slice: ["$pools", 10] },
+        challenge: { $slice: ["$challenge", 10] },
+        levels: { $slice: ["$levels", 10] },
+        profile: { $slice: ["$profile", 10] },
+      },
+    },
+  ]);
+  return result;
+};
+
+const getByWeek = async (month, week) => {
+  const result = await Analytics.aggregate([
+    {
+      $project: {
+        _id: 0,
+        uid: 1,
+        pools: {
+          $filter: {
+            input: "$poolsMain",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+        challenge: {
+          $filter: {
+            input: "$challegeMain",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+        levels: {
+          $filter: {
+            input: "$levels",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+        profile: {
+          $filter: {
+            input: "$profile",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        profile: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: [`$profile.week.${week}`, 0] }, 0] },
+              {
+                uid: "$uid",
+                weekViews: { $arrayElemAt: [`$profile.week.${week}`, 0] },
+              },
+              null,
+            ],
+          },
+        },
+        pools: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: [`$pools.week.${week}`, 0] }, 0] },
+              {
+                uid: "$uid",
+                weekViews: { $arrayElemAt: [`$pools.week.${week}`, 0] },
+              },
+              null,
+            ],
+          },
+        },
+        challenge: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: [`$challenge.week.${week}`, 0] }, 0] },
+              {
+                uid: "$uid",
+                weekViews: { $arrayElemAt: [`$challenge.week.${week}`, 0] },
+              },
+              null,
+            ],
+          },
+        },
+        levels: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: [`$levels.week.${week}`, 0] }, 0] },
+              {
+                uid: "$uid",
+                weekViews: { $arrayElemAt: [`$levels.week.${week}`, 0] },
+              },
+              null,
+            ],
+          },
+        },
+      },
+    },
+    {
+      $addFields: {
+        month: month,
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        month: 1,
+        profile: { $setDifference: ["$profile", [null]] },
+        challenge: { $setDifference: ["$challenge", [null]] },
+        levels: { $setDifference: ["$levels", [null]] },
+        pools: { $setDifference: ["$pools", [null]] },
+      },
+    },
+    {
+      $unwind: {
+        path: "$profile",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "profile.weekViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$month",
+        profile: { $push: "$profile" },
+        challenge: { $first: "$challenge" },
+        levels: { $first: "$levels" },
+        pools: { $first: "$pools" },
+      },
+    },
+    {
+      $unwind: {
+        path: "$pools",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "pools.weekViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$_id",
+        pools: { $push: "$pools" },
+        challenge: { $first: "$challenge" },
+        levels: { $first: "$levels" },
+        profile: { $first: "$profile" },
+      },
+    },
+    {
+      $unwind: {
+        path: "$challenge",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "challenge.weekViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$_id",
+        challenge: { $push: "$challenge" },
+        pools: { $first: "$pools" },
+        levels: { $first: "$levels" },
+        profile: { $first: "$profile" },
+      },
+    },
+    {
+      $unwind: {
+        path: "$levels",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "levels.weekViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$_id",
+        levels: { $push: "$levels" },
+        pools: { $first: "$pools" },
+        challenge: { $first: "$challenge" },
+        profile: { $first: "$profile" },
+      },
+    },
+    {
+      $project: {
+        pools: { $slice: ["$pools", 10] },
+        challenge: { $slice: ["$challenge", 10] },
+        levels: { $slice: ["$levels", 10] },
+        profile: { $slice: ["$profile", 10] },
+      },
+    },
+  ]);
+
+  return result;
+};
+
+const getByDay = async (month, day) => {
+  const result = await Analytics.aggregate([
+    {
+      $project: {
+        _id: 0,
+        uid: 1,
+        pools: {
+          $filter: {
+            input: "$poolsMain",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+        challenge: {
+          $filter: {
+            input: "$challegeMain",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+        levels: {
+          $filter: {
+            input: "$levels",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+        profile: {
+          $filter: {
+            input: "$profile",
+            as: "item",
+            cond: { $eq: ["$$item.month", month] },
+          },
+        },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        profile: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: [`$profile.day.${day}`, 0] }, 0] },
+              {
+                uid: "$uid",
+                dayViews: { $arrayElemAt: [`$profile.day.${day}`, 0] },
+              },
+              null,
+            ],
+          },
+        },
+        pools: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: [`$pools.day.${day}`, 0] }, 0] },
+              {
+                uid: "$uid",
+                dayViews: { $arrayElemAt: [`$pools.day.${day}`, 0] },
+              },
+              null,
+            ],
+          },
+        },
+        challenge: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: [`$challenge.day.${day}`, 0] }, 0] },
+              {
+                uid: "$uid",
+                dayViews: { $arrayElemAt: [`$challenge.day.${day}`, 0] },
+              },
+              null,
+            ],
+          },
+        },
+        levels: {
+          $push: {
+            $cond: [
+              { $gt: [{ $arrayElemAt: [`$levels.day.${day}`, 0] }, 0] },
+              {
+                uid: "$uid",
+                dayViews: { $arrayElemAt: [`$levels.day.${day}`, 0] },
+              },
+              null,
+            ],
+          },
+        },
+      },
+    },
+    {
+      $addFields: {
+        month: month,
+      },
+    },
+    {
+      $project: {
+        _id: 0,
+        month: 1,
+        profile: { $setDifference: ["$profile", [null]] },
+        challenge: { $setDifference: ["$challenge", [null]] },
+        levels: { $setDifference: ["$levels", [null]] },
+        pools: { $setDifference: ["$pools", [null]] },
+      },
+    },
+    {
+      $unwind: {
+        path: "$profile",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "profile.dayViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$month",
+        profile: { $push: "$profile" },
+        challenge: { $first: "$challenge" },
+        levels: { $first: "$levels" },
+        pools: { $first: "$pools" },
+      },
+    },
+    {
+      $unwind: {
+        path: "$pools",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "pools.dayViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$_id",
+        pools: { $push: "$pools" },
+        challenge: { $first: "$challenge" },
+        levels: { $first: "$levels" },
+        profile: { $first: "$profile" },
+      },
+    },
+    {
+      $unwind: {
+        path: "$challenge",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "challenge.dayViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$_id",
+        challenge: { $push: "$challenge" },
+        pools: { $first: "$pools" },
+        levels: { $first: "$levels" },
+        profile: { $first: "$profile" },
+      },
+    },
+    {
+      $unwind: {
+        path: "$levels",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $sort: {
+        "levels.dayViews": -1,
+      },
+    },
+    {
+      $group: {
+        _id: "$_id",
+        levels: { $push: "$levels" },
+        pools: { $first: "$pools" },
+        challenge: { $first: "$challenge" },
+        profile: { $first: "$profile" },
+      },
+    },
+    {
+      $project: {
+        pools: { $slice: ["$pools", 10] },
+        challenge: { $slice: ["$challenge", 10] },
+        levels: { $slice: ["$levels", 10] },
+        profile: { $slice: ["$profile", 10] },
+      },
+    },
+  ]);
+
+  return result;
 };
